@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Детекция медведей</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        .image-container {
+            margin: 20px 0;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            padding: 10px;
+        }
+        .image-preview {
+            max-width: 100%;
+            max-height: 400px;
+        }
+        .detection-box {
+            position: absolute;
+            border: 2px solid #ff0000;
+            background: transparent;
+        }
+        .stats-card {
+            margin: 10px 0;
+        }
+        #resultCanvas {
+            max-width: 100%;
+        }
+    </style>
+</head>
+<body>
+    <div class="container mt-4">
+        <h1 class="text-center mb-4">Система детекции медведей вблизи населенных пунктов</h1>
+        
+        <div class="row">
+            <div class="col-md-8">
+                <div class="card">
+                    <div class="card-header">
+                        Загрузка изображения
+                    </div>
+                    <div class="card-body">
+                        <form id="uploadForm">
+                            <div class="mb-3">
+                                <input type="file" class="form-control" id="imageInput" accept="image/*" required>
+                            </div>
+                            <button type="submit" class="btn btn-primary" id="processBtn">
+                                <span id="processText">Обработать изображение</span>
+                                <span id="processSpinner" class="spinner-border spinner-border-sm d-none" role="status"></span>
+                            </button>
+                        </form>
+                        
+                        <div class="row mt-4">
+                            <div class="col-md-6">
+                                <h5>Оригинал</h5>
+                                <div class="image-container">
+                                    <img id="originalPreview" class="image-preview" style="display: none;">
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <h5>Результат</h5>
+                                <div class="image-container">
+                                    <img id="resultPreview" class="image-preview" style="display: none;">
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="mt-3" id="resultsInfo" style="display: none;">
+                            <h5>Результаты детекции:</h5>
+                            <p id="bearCount"></p>
+                            <div id="detectionsList"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="col-md-4">
+                <div class="card stats-card">
+                    <div class="card-header">
+                        Статистика системы
+                    </div>
+                    <div class="card-body">
+                        <div id="statsContent">
+                            <p>Загрузите изображение для начала работы</p>
+                        </div>
+                        <button class="btn btn-info btn-sm mt-2" onclick="updateStats()">
+                            Обновить статистику
+                        </button>
+                    </div>
+                </div>
+                
+                <div class="card stats-card">
+                    <div class="card-header">
+                        Управление отчетностью
+                    </div>
+                    <div class="card-body">
+                        <button class="btn btn-success w-100 mb-2" onclick="generateReport('excel')">
+                            Скачать Excel отчет
+                        </button>
+
+                        <button class="btn btn-danger w-100 mb-2" onclick="generateReport('pdf')">
+                            Скачать PDF отчет
+                        </button>
+
+                        <button class="btn btn-warning w-100" onclick="generateReport('json')">
+                            Скачать JSON данные
+                        </button>
+
+                        <button class="btn btn-secondary w-100" onclick="viewHistory()">
+                            Просмотреть историю
+                        </button>
+
+                        <div class="mt-2">
+                            <small class="text-muted">
+                                Доступные форматы: Excel, PDF и JSON
+                            </small>
+                        </div>
+                </div>
+
+                </div>
+                
+                <div class="card stats-card">
+                    <div class="card-header">
+                        Информация о системе
+                    </div>
+                    <div class="card-body">
+                        <p><strong>Модель:</strong> YOLO26n</p>
+                        <p><strong>Класс:</strong> Медведь (bear, COCO class 21)</p>
+                        <p><strong>Порог уверенности:</strong> 0.5</p>
+                        <p><strong>История запросов:</strong> сохраняется в JSON</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal fade" id="historyModal" tabindex="-1">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">История запросов</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div id="historyContent"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        document.getElementById('uploadForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const fileInput = document.getElementById('imageInput');
+            const processBtn = document.getElementById('processBtn');
+            const processText = document.getElementById('processText');
+            const processSpinner = document.getElementById('processSpinner');
+            
+            if (!fileInput.files[0]) {
+                alert('Пожалуйста, выберите изображение');
+                return;
+            }
+            
+            const originalPreview = document.getElementById('originalPreview');
+            originalPreview.src = URL.createObjectURL(fileInput.files[0]);
+            originalPreview.style.display = 'block';
+            
+            processText.textContent = 'Обработка...';
+            processSpinner.classList.remove('d-none');
+            processBtn.disabled = true;
+            
+            const formData = new FormData();
+            formData.append('image', fileInput.files[0]);
+            
+            try {
+                const response = await fetch('/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    const resultPreview = document.getElementById('resultPreview');
+                    resultPreview.src = data.result_image + '?t=' + new Date().getTime();
+                    resultPreview.style.display = 'block';
+                    
+                    document.getElementById('bearCount').textContent = 
+                        `Найдено медведей: ${data.bear_count}`;
+                    
+                    const detectionsList = document.getElementById('detectionsList');
+                    if (data.detections.length > 0) {
+                        let html = '<ul class="list-group">';
+                        data.detections.forEach((det, idx) => {
+                            html += `<li class="list-group-item">
+                                Медведь ${idx + 1}: уверенность ${(det.confidence * 100).toFixed(1)}%
+                            </li>`;
+                        });
+                        html += '</ul>';
+                        detectionsList.innerHTML = html;
+                    } else {
+                        detectionsList.innerHTML = '<p class="text-muted">Медведи не обнаружены</p>';
+                    }
+                    
+                    document.getElementById('resultsInfo').style.display = 'block';
+                    
+                    updateStats();
+                    
+                } else {
+                    alert('Ошибка обработки: ' + (data.error || 'Неизвестная ошибка'));
+                }
+                
+            } catch (error) {
+                console.error('Error:', error);
+                alert('Ошибка при загрузке изображения');
+            } finally {
+                processText.textContent = 'Обработать изображение';
+                processSpinner.classList.add('d-none');
+                processBtn.disabled = false;
+            }
+        });
+        
+        function updateStats() {
+            fetch('/stats')
+                .then(response => response.json())
+                .then(data => {
+                    const statsContent = document.getElementById('statsContent');
+                    
+                    let html = `
+                        <p><strong>Всего запросов:</strong> ${data.total_requests}</p>
+                        <p><strong>Всего обнаружено медведей:</strong> ${data.total_bears}</p>
+                        <p><strong>Средняя уверенность:</strong> ${(data.avg_confidence * 100).toFixed(1)}%</p>
+                    `;
+                    
+                    if (data.daily_stats.length > 0) {
+                        html += '<h6>Статистика по дням:</h6><ul class="list-group list-group-flush">';
+                        data.daily_stats.forEach(day => {
+                            html += `
+                                <li class="list-group-item">
+                                    ${day.date}: ${day.count} запросов, ${day.bears} медведей
+                                </li>
+                            `;
+                        });
+                        html += '</ul>';
+                    }
+                    
+                    statsContent.innerHTML = html;
+                });
+        }
+        
+        function generateReport(format) {
+        window.location.href = `/generate-report?format=${format}`;
+        }
+        
+        function viewHistory() {
+            fetch('/history')
+                .then(response => response.json())
+                .then(data => {
+                    const historyContent = document.getElementById('historyContent');
+                    
+                    if (data.length === 0) {
+                        historyContent.innerHTML = '<p>История пуста</p>';
+                    } else {
+                        let html = '<div class="list-group">';
+                        data.slice(-20).reverse().forEach(item => {
+                            const date = new Date(item.timestamp).toLocaleString();
+                            html += `
+                                <div class="list-group-item">
+                                    <div class="d-flex w-100 justify-content-between">
+                                        <h6 class="mb-1">Запрос от ${date}</h6>
+                                        <small>${item.bear_count} медведей</small>
+                                    </div>
+                                    <small>Детекций: ${item.detections.length}</small>
+                                    <div class="mt-2">
+                                        <a href="${item.result_image}" target="_blank" class="btn btn-sm btn-outline-primary">
+                                            Просмотреть результат
+                                        </a>
+                                    </div>
+                                </div>
+                            `;
+                        });
+                        html += '</div>';
+                        historyContent.innerHTML = html;
+                    }
+                    
+                    new bootstrap.Modal(document.getElementById('historyModal')).show();
+                });
+        }
+        
+        document.addEventListener('DOMContentLoaded', updateStats);
+    </script>
+</body>
+</html>
